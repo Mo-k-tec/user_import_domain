@@ -1,3 +1,5 @@
+This is a port of the drupal 6 user import domain module to Drupal 7.
+
 MODULE:
 User import domain access Groups Module
 
