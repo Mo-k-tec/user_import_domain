@@ -1,0 +1,28 @@
+<?php
+
+/**
+ * @file
+ * Install and un-install tables and values for the module User import domain.
+ */
+
+/**
+ * Implements hook_enable().
+ */
+function user_import_domain_enable() {
+  // Make module run after user_import so that on hook_user_import_after_save.
+  // Roles already been saved so we can honor domain's role default settings.
+  $select = db_select('system', 's');
+  $select->fields('s', array('weight'));
+  $select->condition('s.name', 'user_import');
+  $weight = $select->execute()->fetchAllAssoc('weight');
+
+
+  db_query("UPDATE {system} SET weight = :weight WHERE name = 'user_import_domain'", array(':weight' => $weight[0]->weight + 1));
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function user_import_domain_uninstall() {
+  variable_del('user_import_domain_import_domain');
+}

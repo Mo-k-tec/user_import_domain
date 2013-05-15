@@ -1,0 +1,254 @@
+<?php
+
+/**
+ * @file
+ * Extension to the user_import module to enable support for domain access.
+ */
+
+/**
+ * Implements hook_permission().
+ */
+function user_import_domain_permission() {
+  return array(
+    'administer user import domain' => array(
+      'title' => t('administer user import domain'),
+      'description' => t('administer user import domain'),
+    ),
+    'import to any domain' => array(
+      'title' => t('import to any domain'),
+      'description' => t('import to any domain'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function user_import_domain_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'user_import_configure_form') {
+    $form['domain'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Domain settings'),
+      '#weight' => 0,
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
+
+    $form['domain']['message'] = array(
+      '#type' => 'item',
+      '#value' => t('When running imports, <a href="@user-defaults">user default settings</a> will be honored.', array('@user-defaults' => url('admin/build/domain/roles'))),
+    );
+
+    $form['domain']['import_domain'] = array(
+      '#type' => 'radios',
+      '#title' => t('Import domain'),
+      '#options' => array(
+        'current' => t('Current domain'),
+        'select' => t('Select domains'),
+      ),
+      '#default_value' => variable_get('user_import_domain_import_domain', 'current'),
+      '#description' => t('If using Current domain, users will all be assigned to the current domain.') . '<br />' .
+      t('If using Select domains, domains can be chosen for all users on the import settings and they can be imported from the csv file on a per user basis.') . '<br />' .
+      t("If the user doing the import doesn't have the 'import to any domain' permission then the import will only allow users to be assigned to domains the importing user is a member of."),
+    );
+
+    $form['#submit'][] = 'user_import_domain_user_import_configure_form_submit';
+  }
+}
+
+/**
+ * Extra submission function for user_import_configure_form.
+ */
+function user_import_domain_user_import_configure_form_submit($form, &$form_state) {
+  variable_set('user_import_domain_import_domain', $form_state['values']['import_domain']);
+}
+
+/**
+ * Implements hook_user_import_form_field_match().
+ */
+function domain_user_import_form_field_match() {
+  $options = array();
+  // If the current domain option is set skip this.
+  if (variable_get('user_import_domain_import_domain', 'current') == 'current') {
+    return $options;
+  }
+  $options['domain']['domain_user'] = t('Domains');
+  return $options;
+}
+
+/**
+ * Implements hook_user_import_form_fieldsets().
+ */
+function domain_user_import_form_fieldset($import, $collapsed) {
+  // If the current domain option is set skip this.
+  if (variable_get('user_import_domain_import_domain', 'current') == 'current') {
+    return array();
+  }
+  global $user;
+  $domains = domain_domains();
+  $user_domains = domain_get_user_domains($user);
+
+  $domain_options = array();
+  foreach ($domains as $domain) {
+    if (!user_access('import to any domain') && !in_array($domain['domain_id'], $user_domains)) {
+      continue;
+    }
+    $domain_options[$domain['domain_id']] = $domain['sitename'];
+  }
+
+  $form['domain_selection'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Domain assign'),
+    '#weight' => 0,
+    '#collapsible' => TRUE,
+    '#collapsed' => $collapsed,
+  );
+
+  $form['domain_selection']['domains'] = array(
+    '#title' => t('Assign Domain(s) to all users'),
+    '#type' => 'checkboxes',
+    '#options' => $domain_options,
+    '#default_value' => $import['domains'] ? $import['domains'] : array(),
+    '#description' => t("Select which domain(s) all imported users should be assigned."),
+  );
+
+  return $form;
+}
+
+/**
+ * Implements hook_user_import_form_update_user().
+ */
+function domain_user_import_form_update_user() {
+  // If the current domain option is set skip this.
+  if (variable_get('user_import_domain_import_domain', 'current') == 'current') {
+    return array();
+  }
+  $form['domain_user'] = array('title' => t('Domains'), 'description' => t('Affected: domains assigned to user.'));
+  return $form;
+}
+
+/**
+ * Implements hook_user_import_data().
+ */
+function domain_user_import_data($settings, $update_setting, $column_settings, $module, $field_id, $data, $column_id) {
+  if ($module != 'domain') {
+    return;
+  }
+  // If the current domain option is set skip this.
+  if (variable_get('user_import_domain_import_domain', 'current') == 'current') {
+    return;
+  }
+
+  if ($field_id == 'domain_user') {
+    $value = domain_user_import_domains_data($data[$column_id], $settings['multi_value_delimiter']);
+  }
+
+  return $value;
+}
+
+/**
+ * Helper function to get import data for domains.
+ */
+function domain_user_import_domains_data($data, $delimiter = ',') {
+  if (empty($data)) {
+    return;
+  }
+
+  global $user;
+  $user_domains = domain_get_user_domains($user);
+  $existing_domains = domain_domains();
+  $domains = explode($delimiter, $data);
+
+  // Check if any domains are specified that aren't recognized.
+  // If the user running the import doesn't have permission to import
+  // to any domain only domains they are a member of are recognized.
+  $unrecognised = array();
+  if (!empty($domains)) {
+    foreach ($domains as $domain) {
+      $domain = trim($domain);
+      $found = FALSE;
+      foreach ($existing_domains as $did => $existing_domain) {
+        if (strtolower($domain) == strtolower($existing_domain['sitename']) &&
+           (user_access('import to any domain') || in_array($did, $user_domains))) {
+          $found = TRUE;
+          $domains[$did] = $did;
+        }
+      }
+      if (!$found) {
+        $unrecognised[] = $domain;
+      }
+    }
+  }
+
+  if (!empty($unrecognised)) {
+    user_import_errors(t('The following unrecognised domains were specified: ') . implode(', ', $unrecognised));
+  }
+
+  return $domains;
+}
+
+/**
+ * Implements hook_user_import_pre_save().
+ */
+function domain_user_import_pre_save($settings, $account, $fields, $errors, $update_setting_per_module) {
+  // If the current domain option just give the current domain.
+  if (variable_get('user_import_domain_import_domain', 'current') == 'current') {
+    $current_domain = domain_get_domain();
+    $account_add['domain_user'][$current_domain['domain_id']] = $current_domain['domain_id'];
+  }
+  else {
+    if (!empty($account['uid'])) {
+      // Update domains.
+      if ($update_setting_per_module['domain_user'] == UPDATE_REPLACE) {
+        $account_add['domain_user'] = array();
+      }
+      else {
+        $account_add['domain_user'] = $account['domain_user'];
+      }
+      if ($update_setting_per_module['domain_user'] == UPDATE_REPLACE || $update_setting_per_module['domain_user'] == UPDATE_ADD) {
+        if (isset($settings['domains'])) {
+          foreach ($settings['domains'] as $did => $domain_set) {
+            if (!empty($domain_set)) {
+              $account_add['domain_user'][$did] = $did;
+            }
+          }
+        }
+      }
+    }
+    else {
+      // Add selected domains.
+      if (isset($settings['domains'])) {
+        foreach ($settings['domains'] as $did => $domain_set) {
+          if (!empty($domain_set)) {
+            $account_add['domain_user'][$did] = $did;
+          }
+        }
+      }
+    }
+
+    if (is_array($fields['domain']['domain_user'])) {
+      foreach ($fields['domain']['domain_user'] as $did) {
+        $account_add['domain_user'][$did] = $did;
+      }
+    }
+  }
+
+  return $account_add;
+}
+
+/**
+ * Implements hook_user_import_after_save().
+ */
+function domain_user_import_after_save($settings, $account, $password, $fields, $updated, $update_setting_per_module) {
+  // Make sure to honor domain's role default settings.
+  // Because user_import doesn't do the roles until hook_import_after_save.
+  // Add the new user role if necessary so domain can use it.
+  $add_roles = variable_get('domain_add_roles', 0);
+  if (!$updated) {
+    $add_roles = TRUE;
+    $account->roles[0] = 'new user';
+  }
+  $domains = domain_get_user_domains($account, $add_roles, TRUE);
+
+  user_save($account, array('domain_user' => $domains));
+}

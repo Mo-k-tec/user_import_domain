@@ -1,0 +1,5 @@
+name = User Import Domain
+description = Add options for importing users into Domains.
+dependencies[] = domain
+dependencies[] = user_import
+core = 7.x
